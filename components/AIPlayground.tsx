@@ -242,10 +242,10 @@ function runMock(req: StreamRequest, cb: StreamCallbacks, isCancelled: () => boo
 // Mock model catalog for Side by Side (named) + Battle (anonymous pool).
 export interface ModelInfo { id: string; name: string; provider: string; glyph: string; category: 'Text' | 'Code' | 'Image' | 'Search'; }
 const MODEL_CATALOG: ModelInfo[] = [
-  { id: 'gemini-2.5-flash',                          name: 'Gemini 2.5 Flash', provider: 'Google',   glyph: '◆', category: 'Text' },
-  { id: 'deepseek/deepseek-r1:free',                 name: 'DeepSeek R1',      provider: 'DeepSeek', glyph: '⌬', category: 'Text' },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free',    name: 'Llama 3.3 70B',    provider: 'Meta',     glyph: '∞', category: 'Text' },
-  { id: 'qwen/qwen3-coder:free',                     name: 'Qwen3 Coder',      provider: 'Qwen',     glyph: '⬡', category: 'Code' },
+  { id: 'gemini-2.5-flash',                       name: 'Gemini 2.5 Flash', provider: 'Google',     glyph: '◆', category: 'Text' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B',    provider: 'Meta',       glyph: '∞', category: 'Text' },
+  { id: 'openrouter/free',                        name: 'Auto (Free)',      provider: 'OpenRouter', glyph: '⌬', category: 'Text' },
+  { id: 'qwen/qwen3-coder:free',                  name: 'Qwen3 Coder',      provider: 'Qwen',       glyph: '⬡', category: 'Code' },
 ];
 
 // ----- BATTLE MODE types -----
