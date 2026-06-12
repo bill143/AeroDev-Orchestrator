@@ -1,30 +1,27 @@
-// api/chat.ts
-// Server-side proxy to Google Gemini. The API key is read from the server
-// environment (GEMINI_API_KEY) and is NEVER sent to the browser. The client
-// (AIPlayground.tsx → streamCompletion) POSTs { prompt, model, capability } here
-// and receives the model's text streamed back as a plain-text body.
+// app/api/chat/route.ts
+// Server-side proxy to AI model providers. API keys are read from the server
+// environment and NEVER sent to the browser. The client (AIPlayground.tsx →
+// streamCompletion) POSTs { prompt, model, capability } here and receives the
+// model's text streamed back as a plain-text body.
 //
-// Deploy target: Vercel (Edge runtime, for low-latency streaming). The same file
-// works on any platform that supports the Web Fetch API + ReadableStream.
+// ROUTING: if `model` contains a "/" (e.g. "deepseek/deepseek-r1:free") the
+// request is sent to OpenRouter. Otherwise it is sent to Google Gemini.
 //
-// REQUIRED ENV VAR (set in your host's dashboard, never in code):
-//   GEMINI_API_KEY = your key from https://aistudio.google.com/apikey
-//
-// OPTIONAL ENV VAR:
-//   GEMINI_MODEL   = model id (defaults to "gemini-2.5-flash")
+// REQUIRED ENV VARS (set in your host's dashboard, never in code):
+//   GEMINI_API_KEY      = key from https://aistudio.google.com/apikey
+//   OPENROUTER_API_KEY  = key from https://openrouter.ai/keys
 
 export const runtime = 'edge';
 
 interface ChatBody {
   prompt?: string;
-  model?: string;       // the UI's display model name (not used to pick the Gemini model)
-  capability?: string;  // 'auto' | 'code' | 'search' | 'image' | 'video'
+  model?: string;
+  capability?: string;
 }
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Light, capability-aware system instruction. (Image/Video are acknowledged as
-// text for now — true image/video generation is a separate provider integration.)
 function systemFor(capability: string): string {
   switch (capability) {
     case 'code':
@@ -45,12 +42,6 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: 'Method not allowed.' }, 405);
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    // 501 tells the client "backend not configured" so it can fall back to demo mode.
-    return json({ error: 'Server is not configured with GEMINI_API_KEY.' }, 501);
-  }
-
   let body: ChatBody;
   try {
     body = (await req.json()) as ChatBody;
@@ -63,7 +54,97 @@ export async function POST(req: Request): Promise<Response> {
   if (prompt.length > 32000) return json({ error: 'Prompt too long.' }, 413);
 
   const capability = (body.capability ?? 'auto').toString();
-  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+  const requestedModel = (body.model ?? '').toString().trim();
+  const isOpenRouter = requestedModel.includes('/');
+
+  if (isOpenRouter) {
+    return handleOpenRouter(requestedModel, prompt, capability);
+  }
+  return handleGemini(requestedModel, prompt, capability);
+}
+
+async function handleOpenRouter(model: string, prompt: string, capability: string): Promise<Response> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return json({ error: 'Server is not configured with OPENROUTER_API_KEY.' }, 501);
+  }
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://aero-dev-orchestrator.vercel.app',
+        'X-Title': 'Elite Arena',
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 2048,
+        messages: [
+          { role: 'system', content: systemFor(capability) },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+  } catch {
+    return json({ error: 'Failed to reach the model service.' }, 502);
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    const detail = await safeText(upstream);
+    return json({ error: `Model service error (${upstream.status}). ${detail}`.trim() }, 502);
+  }
+
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = '';
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) { controller.close(); return; }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+        for (const evt of events) {
+          for (const line of evt.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+              const obj = JSON.parse(payload);
+              const text = obj?.choices?.[0]?.delta?.content;
+              if (text) controller.enqueue(encoder.encode(text));
+            } catch {}
+          }
+        }
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel() { reader.cancel().catch(() => {}); },
+  });
+
+  return streamResponse(stream);
+}
+
+async function handleGemini(requestedModel: string, prompt: string, capability: string): Promise<Response> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return json({ error: 'Server is not configured with GEMINI_API_KEY.' }, 501);
+  }
+
+  const model =
+    requestedModel.toLowerCase().startsWith('gemini')
+      ? requestedModel
+      : (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
 
   const upstreamUrl = `${GEMINI_BASE}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 
@@ -73,7 +154,6 @@ export async function POST(req: Request): Promise<Response> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Key travels in a header, not the URL — never logged in query strings.
         'x-goog-api-key': apiKey,
       },
       body: JSON.stringify({
@@ -91,7 +171,6 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: `Model service error (${upstream.status}). ${detail}`.trim() }, 502);
   }
 
-  // Parse Gemini's SSE stream and re-emit only the text deltas as a plain stream.
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -103,8 +182,6 @@ export async function POST(req: Request): Promise<Response> {
         const { done, value } = await reader.read();
         if (done) { controller.close(); return; }
         buffer += decoder.decode(value, { stream: true });
-
-        // SSE events are separated by blank lines; each "data:" line holds JSON.
         const events = buffer.split('\n\n');
         buffer = events.pop() ?? '';
         for (const evt of events) {
@@ -117,20 +194,20 @@ export async function POST(req: Request): Promise<Response> {
               const obj = JSON.parse(payload);
               const text = obj?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) controller.enqueue(encoder.encode(text));
-            } catch {
-              // ignore keep-alive / non-JSON lines
-            }
+            } catch {}
           }
         }
       } catch (err) {
         controller.error(err);
       }
     },
-    cancel() {
-      reader.cancel().catch(() => {});
-    },
+    cancel() { reader.cancel().catch(() => {}); },
   });
 
+  return streamResponse(stream);
+}
+
+function streamResponse(stream: ReadableStream<Uint8Array>): Response {
   return new Response(stream, {
     status: 200,
     headers: {

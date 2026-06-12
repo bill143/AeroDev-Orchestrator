@@ -242,15 +242,10 @@ function runMock(req: StreamRequest, cb: StreamCallbacks, isCancelled: () => boo
 // Mock model catalog for Side by Side (named) + Battle (anonymous pool).
 export interface ModelInfo { id: string; name: string; provider: string; glyph: string; category: 'Text' | 'Code' | 'Image' | 'Search'; }
 const MODEL_CATALOG: ModelInfo[] = [
-  { id: 'gpt-4o',        name: 'GPT-4o',           provider: 'OpenAI',     glyph: '◯', category: 'Text' },
-  { id: 'claude-opus',   name: 'Claude Opus 4',    provider: 'Anthropic',  glyph: '✳', category: 'Text' },
-  { id: 'gemini-pro',    name: 'Gemini 2.5 Pro',   provider: 'Google',     glyph: '◆', category: 'Text' },
-  { id: 'llama-3',       name: 'Llama 3 70B',      provider: 'Meta',       glyph: '∞', category: 'Text' },
-  { id: 'codestral',     name: 'Codestral',        provider: 'Mistral',    glyph: '⬡', category: 'Code' },
-  { id: 'deepseek-cdr',  name: 'DeepSeek Coder',   provider: 'DeepSeek',   glyph: '⌬', category: 'Code' },
-  { id: 'dalle-3',       name: 'DALL·E 3',         provider: 'OpenAI',     glyph: '◯', category: 'Image' },
-  { id: 'flux-pro',      name: 'FLUX.1 Pro',       provider: 'BFL',        glyph: '✦', category: 'Image' },
-  { id: 'perplexity',    name: 'Sonar Large',      provider: 'Perplexity', glyph: '◐', category: 'Search' },
+  { id: 'gemini-2.5-flash',                          name: 'Gemini 2.5 Flash', provider: 'Google',   glyph: '◆', category: 'Text' },
+  { id: 'deepseek/deepseek-r1:free',                 name: 'DeepSeek R1',      provider: 'DeepSeek', glyph: '⌬', category: 'Text' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free',    name: 'Llama 3.3 70B',    provider: 'Meta',     glyph: '∞', category: 'Text' },
+  { id: 'qwen/qwen3-coder:free',                     name: 'Qwen3 Coder',      provider: 'Qwen',     glyph: '⬡', category: 'Code' },
 ];
 
 // ----- BATTLE MODE types -----
@@ -741,7 +736,7 @@ export default function AIPlayground() {
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setDirectStatus('streaming');
 
-    const handle = streamCompletion({ prompt, model: 'arena-default', capability: cap }, {
+    const handle = streamCompletion({ prompt, model: 'gemini-2.5-flash', capability: cap }, {
       onToken: (chunk) => setMessages(prev => prev.map(m => m.id === aId ? { ...m, text: m.text + chunk } : m)),
       onDone: () => {
         setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false } : m));
@@ -777,7 +772,7 @@ export default function AIPlayground() {
     const aId = `a_${Date.now()}`;
     setMessages(prev => [...prev, { id: aId, role: 'assistant', text: '', streaming: true }]);
     setDirectStatus('streaming');
-    const handle = streamCompletion({ prompt: lastDirectPrompt, model: 'arena-default', capability: cap }, {
+    const handle = streamCompletion({ prompt: lastDirectPrompt, model: 'gemini-2.5-flash', capability: cap }, {
       onToken: (chunk) => setMessages(prev => prev.map(m => m.id === aId ? { ...m, text: m.text + chunk } : m)),
       onDone: () => { setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false } : m)); setDirectStatus('idle'); streamHandles.current = streamHandles.current.filter(h => h !== handle); },
       onError: (msg) => { setMessages(prev => prev.map(m => m.id === aId ? { ...m, streaming: false, error: true, text: msg } : m)); setDirectStatus('error'); streamHandles.current = streamHandles.current.filter(h => h !== handle); },
@@ -790,12 +785,12 @@ export default function AIPlayground() {
     cancelAllStreams();
     const fresh = freshBattle();
     setBattle({ ...fresh, submitting: true });
-    const hA = streamCompletion({ prompt, model: fresh.modelA.name }, {
+    const hA = streamCompletion({ prompt, model: fresh.modelA.id }, {
       onToken: (chunk) => setBattle(b => ({ ...b, respA: b.respA + chunk })),
       onDone: () => setBattle(b => ({ ...b, doneA: true })),
       onError: (msg) => setBattle(b => ({ ...b, doneA: true, respA: b.respA || msg, errorA: true })),
     });
-    const hB = streamCompletion({ prompt, model: fresh.modelB.name }, {
+    const hB = streamCompletion({ prompt, model: fresh.modelB.id }, {
       onToken: (chunk) => setBattle(b => ({ ...b, respB: b.respB + chunk })),
       onDone: () => setBattle(b => ({ ...b, doneB: true })),
       onError: (msg) => setBattle(b => ({ ...b, doneB: true, respB: b.respB || msg, errorB: true })),
@@ -814,12 +809,12 @@ export default function AIPlayground() {
     setSbs({ submitting: true, left: '', right: '', done: false });
     let lDone = false, rDone = false;
     const checkDone = () => { if (lDone && rDone) setSbs(s => ({ ...s, submitting: false, done: true })); };
-    const hL = streamCompletion({ prompt, model: leftModel.name }, {
+    const hL = streamCompletion({ prompt, model: leftModel.id }, {
       onToken: (chunk) => setSbs(s => ({ ...s, left: s.left + chunk })),
       onDone: () => { lDone = true; checkDone(); },
       onError: (msg) => { lDone = true; setSbs(s => ({ ...s, left: s.left || msg })); checkDone(); },
     });
-    const hR = streamCompletion({ prompt, model: rightModel.name }, {
+    const hR = streamCompletion({ prompt, model: rightModel.id }, {
       onToken: (chunk) => setSbs(s => ({ ...s, right: s.right + chunk })),
       onDone: () => { rDone = true; checkDone(); },
       onError: (msg) => { rDone = true; setSbs(s => ({ ...s, right: s.right || msg })); checkDone(); },
